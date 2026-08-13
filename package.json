@@ -1,0 +1,46 @@
+{
+  "name": "@xirsys/grok-voice-think-fast-2-xirsys",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Grok Voice Think Fast 2.0 over a browser-to-Node WebRTC relay with Xirsys STUN/TURN.",
+  "license": "MIT",
+  "homepage": "https://github.com/xirsys/grok-voice-think-fast-2-xirsys#readme",
+  "bugs": {
+    "url": "https://github.com/xirsys/grok-voice-think-fast-2-xirsys/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xirsys/grok-voice-think-fast-2-xirsys.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist",
+    "public",
+    ".env.example",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "test": "NODE_ENV=test tsx --test --test-concurrency=1 test/**/*.test.ts",
+    "check:client": "node --check public/sdk/grok-voice.js && node --check public/app.js",
+    "check": "npm run build && npm run check:client && npm test"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0",
+    "werift": "^0.24.4",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.3.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}
