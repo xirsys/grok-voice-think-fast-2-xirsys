@@ -1,7 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { server } from "../src/server.js";
+import { parseWebRtcPortRange, server } from "../src/server.js";
+
+test("validates the optional WebRTC UDP port range", () => {
+  assert.deepEqual(parseWebRtcPortRange("50000", "50100"), [50000, 50100]);
+  assert.equal(parseWebRtcPortRange(undefined, undefined), undefined);
+  assert.throws(
+    () => parseWebRtcPortRange("50000", undefined),
+    /must be set together/,
+  );
+  assert.throws(
+    () => parseWebRtcPortRange("50100", "50000"),
+    /must be within 1024-65535 and ordered/,
+  );
+});
 
 test("bootstrap mints short-lived credentials without returning either provider secret", async (context) => {
   process.env.XIRSYS_IDENT = "account";

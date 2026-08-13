@@ -148,6 +148,9 @@ export class GrokVoiceClient extends EventTarget {
   }
 
   #wirePeer() {
+    this.#peer.onicegatheringstatechange = () => {
+      this.#emit("ice-gathering-state", { state: this.#peer.iceGatheringState });
+    };
     this.#peer.onicecandidate = ({ candidate }) => {
       if (candidate && this.#signaling?.readyState === WebSocket.OPEN) {
         this.#signaling.send(JSON.stringify({ type: "ice-candidate", candidate }));
@@ -222,9 +225,11 @@ export class GrokVoiceClient extends EventTarget {
     this.#signaling.onerror = () => {
       this.#emit("error", { error: new Error("The signaling connection failed") });
     };
-    this.#signaling.onclose = () => {
+    this.#signaling.onclose = ({ code }) => {
       if (!["idle", "connected"].includes(this.#state)) {
-        this.#emit("error", { error: new Error("The signaling connection closed early") });
+        this.#emit("error", {
+          error: new Error(`The signaling connection closed early (code ${code})`),
+        });
       }
     };
   }

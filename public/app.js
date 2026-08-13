@@ -46,8 +46,13 @@ client.addEventListener("ice-state", ({ detail }) => {
   if (["connected", "completed"].includes(detail.state)) void showStats();
 });
 
+client.addEventListener("ice-gathering-state", ({ detail }) => {
+  log("ICE gathering", detail.state);
+});
+
 client.addEventListener("server-peer-state", ({ detail }) => {
   elements.bridgeState.textContent = `Relay peer ${detail.connectionState}`;
+  log("relay peer", `${detail.connectionState} · ICE ${detail.iceConnectionState}`);
 });
 
 client.addEventListener("realtime", ({ detail }) => {

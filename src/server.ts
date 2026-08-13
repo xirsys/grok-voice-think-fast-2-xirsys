@@ -17,6 +17,7 @@ import {
 } from "./sdk/index.js";
 
 interface PendingSession {
+  traceId: string;
   clientSecret: string;
   iceServers: IceServer[];
   forceRelay: boolean;
@@ -34,6 +35,10 @@ const port = parsePositiveInteger(process.env.PORT, 3002);
 const publicOrigin = normalizeOrigin(process.env.PUBLIC_ORIGIN);
 const model = process.env.XAI_MODEL ?? "grok-voice-think-fast-2.0";
 const voice = process.env.XAI_VOICE ?? "eve";
+const icePortRange = parseWebRtcPortRange(
+  process.env.WEBRTC_UDP_PORT_MIN,
+  process.env.WEBRTC_UDP_PORT_MAX,
+);
 const instructions =
   process.env.XAI_INSTRUCTIONS ??
   "You are a concise, curious voice assistant. Speak naturally and keep answers brief.";
@@ -87,12 +92,18 @@ app.post(
         xirsys.getIceServers(parsePositiveInteger(process.env.XIRSYS_ICE_TTL_SECONDS, 60)),
       ]);
       const sessionId = crypto.randomBytes(24).toString("base64url");
+      const traceId = crypto.randomBytes(6).toString("hex");
       pendingSessions.set(sessionId, {
+        traceId,
         clientSecret: clientSecret.value,
         iceServers,
         forceRelay,
         reasoningEffort,
         expiresAt: Date.now() + 120_000,
+      });
+      logSession(traceId, "bootstrap.ready", {
+        forceRelay,
+        iceUrls: countIceUrls(iceServers),
       });
 
       response.status(201).json({
@@ -146,6 +157,7 @@ server.on("upgrade", (request, socket, head) => {
   }
   pendingSessions.delete(sessionId);
   signalingServer.handleUpgrade(request, socket, head, (webSocket) => {
+    logSession(session.traceId, "signaling.accepted");
     void runSignalingSession(webSocket, sessionId, session);
   });
 });
@@ -163,11 +175,13 @@ async function runSignalingSession(
     clientSecret: session.clientSecret,
     iceServers: session.iceServers,
     forceRelay: session.forceRelay,
+    ...(icePortRange ? { icePortRange } : {}),
     model,
     voice,
     instructions,
     reasoningEffort: session.reasoningEffort,
     sendSignal,
+    onMilestone: (name, details) => logSession(session.traceId, name, details),
   });
 
   let signalQueue = Promise.resolve();
@@ -183,19 +197,32 @@ async function runSignalingSession(
     }
 
     signalQueue = signalQueue
-      .then(() => peer.handleSignal(message))
+      .then(async () => {
+        if (isSignalType(message, "offer")) logSession(session.traceId, "signal.offer");
+        await peer.handleSignal(message);
+      })
       .catch((error: unknown) => {
+        logSession(session.traceId, "signal.error", {
+          message: error instanceof Error ? error.message : "Signaling failed",
+        });
         sendSignal({
           type: "error",
           message: error instanceof Error ? error.message : "Signaling failed",
         });
       });
   });
-  webSocket.once("close", () => peer.close());
-  webSocket.once("error", () => peer.close());
+  webSocket.once("close", (code) => {
+    logSession(session.traceId, "signaling.closed", { code });
+    peer.close();
+  });
+  webSocket.once("error", () => {
+    logSession(session.traceId, "signaling.error");
+    peer.close();
+  });
 
   try {
     await peer.initialize();
+    logSession(session.traceId, "xai.connected");
     sendSignal({ type: "ready", model, voice });
   } catch (error) {
     console.error("Voice bridge setup failed", error instanceof Error ? error.message : error);
@@ -216,6 +243,9 @@ cleanupTimer.unref();
 if (process.env.NODE_ENV !== "test") {
   server.listen(port, host, () => {
     console.log(`Grok Voice Think Fast 2.0 + Xirsys tutorial: http://${host}:${port}`);
+    if (icePortRange) {
+      console.log(`WebRTC UDP port range: ${icePortRange[0]}-${icePortRange[1]}`);
+    }
   });
 }
 
@@ -236,6 +266,22 @@ export function normalizeOrigin(value: string | undefined): string | undefined {
   return url.origin;
 }
 
+export function parseWebRtcPortRange(
+  minimum: string | undefined,
+  maximum: string | undefined,
+): [number, number] | undefined {
+  if (minimum === undefined && maximum === undefined) return undefined;
+  if (minimum === undefined || maximum === undefined) {
+    throw new TypeError("WEBRTC_UDP_PORT_MIN and WEBRTC_UDP_PORT_MAX must be set together");
+  }
+  const min = parsePositiveInteger(minimum, 0);
+  const max = parsePositiveInteger(maximum, 0);
+  if (min < 1024 || max > 65_535 || min > max) {
+    throw new RangeError("WebRTC UDP port range must be within 1024-65535 and ordered");
+  }
+  return [min, max];
+}
+
 function getSignalingSessionId(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const match = new URL(value, "http://localhost").pathname.match(/^\/api\/signaling\/([A-Za-z0-9_-]{32})$/);
@@ -246,6 +292,29 @@ function requireEnvironment(name: string): string {
   const value = process.env[name];
   if (!value) throw new TypeError(`Missing required environment variable: ${name}`);
   return value;
+}
+
+function countIceUrls(iceServers: IceServer[]): number {
+  return iceServers.reduce(
+    (total, server) => total + (Array.isArray(server.urls) ? server.urls.length : 1),
+    0,
+  );
+}
+
+function isSignalType(value: unknown, type: string): boolean {
+  return typeof value === "object" && value !== null && "type" in value && value.type === type;
+}
+
+function logSession(
+  traceId: string,
+  event: string,
+  details?: Record<string, unknown>,
+): void {
+  console.log("voice-session", {
+    traceId,
+    event,
+    ...(details ?? {}),
+  });
 }
 
 function parsePositiveInteger(value: string | undefined, fallback: number): number {

@@ -222,6 +222,8 @@ direct path when one is available.
 - Authenticate the bootstrap endpoint and authorize every new session.
 - Add a durable, shared rate limiter before running more than one Node process.
 - Set `PUBLIC_ORIGIN` to the exact public HTTPS origin.
+- Set `WEBRTC_UDP_PORT_MIN` and `WEBRTC_UDP_PORT_MAX` to a small high-port
+  range, then allow that UDP range through the host and cloud firewalls.
 - Keep Xirsys credentials and any server-owned xAI key in a secret manager.
 - Never log request bodies, authorization headers, client secrets, TURN
   usernames/passwords, or token-bearing URLs.

@@ -17,11 +17,13 @@ export interface VoicePeerSessionOptions {
   clientSecret: string;
   iceServers: IceServer[];
   forceRelay: boolean;
+  icePortRange?: [number, number];
   model: string;
   voice: string;
   instructions: string;
   reasoningEffort: "high" | "none";
   sendSignal: (message: Record<string, unknown>) => void;
+  onMilestone?: (name: string, details?: Record<string, unknown>) => void;
 }
 
 export class VoicePeerSession {
@@ -36,6 +38,7 @@ export class VoicePeerSession {
     this.#peer = new RTCPeerConnection({
       iceServers: options.iceServers,
       iceTransportPolicy: options.forceRelay ? "relay" : "all",
+      ...(options.icePortRange ? { icePortRange: options.icePortRange } : {}),
     } as never);
     this.#xai = new XaiRealtimeRelay({
       clientSecret: options.clientSecret,
@@ -99,6 +102,10 @@ export class VoicePeerSession {
       });
     };
     this.#peer.onconnectionstatechange = () => {
+      this.#options.onMilestone?.("peer.state", {
+        connectionState: this.#peer.connectionState,
+        iceConnectionState: this.#peer.iceConnectionState,
+      });
       this.#options.sendSignal({
         type: "peer-state",
         connectionState: this.#peer.connectionState,
@@ -114,6 +121,7 @@ export class VoicePeerSession {
     if (!channel) return;
     this.#dataChannel = channel;
     channel.onopen = () => {
+      this.#options.onMilestone?.("data-channel.open");
       this.#sendData({
         type: "bridge.ready",
         model: this.#options.model,
@@ -131,8 +139,14 @@ export class VoicePeerSession {
         });
       }
     };
-    channel.onerror = () => this.close();
-    channel.onclose = () => this.close();
+    channel.onerror = () => {
+      this.#options.onMilestone?.("data-channel.error");
+      this.close();
+    };
+    channel.onclose = () => {
+      this.#options.onMilestone?.("data-channel.close");
+      this.close();
+    };
   }
 
   #sendData(event: Record<string, unknown>): void {
