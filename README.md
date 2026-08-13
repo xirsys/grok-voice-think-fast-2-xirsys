@@ -8,7 +8,7 @@ PCM16 audio and Realtime events to xAI over WebSocket.
 This is a learning implementation, not a production-ready voice platform.
 
 - Public repository: [github.com/xirsys/grok-voice-think-fast-2-xirsys](https://github.com/xirsys/grok-voice-think-fast-2-xirsys)
-- Planned live demo: [demo.xirsys.com/grok-voice-think-fast](https://demo.xirsys.com/grok-voice-think-fast/)
+- Live demo: [demo.xirsys.com/grok-voice-think-fast-2-xirsys](https://demo.xirsys.com/grok-voice-think-fast-2-xirsys/)
 
 ## What goes over which transport?
 
