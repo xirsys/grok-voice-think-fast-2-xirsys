@@ -52,10 +52,21 @@ export class VoicePeerSession {
       },
     });
     this.#wirePeer();
+    this.#attachDataChannel(this.#peer.createDataChannel("xai-voice", { ordered: true }) as never);
   }
 
   async initialize(): Promise<void> {
     await this.#xai.connect();
+  }
+
+  async createOffer(): Promise<string> {
+    const offer = await this.#peer.createOffer();
+    await this.#peer.setLocalDescription(offer);
+    await this.#waitForIceGatheringComplete(10_000);
+    this.#options.onMilestone?.("signal.offer", {
+      iceGatheringState: this.#peer.iceGatheringState,
+    });
+    return this.#peer.localDescription?.sdp ?? offer.sdp;
   }
 
   async handleSignal(message: unknown): Promise<void> {
@@ -63,18 +74,9 @@ export class VoicePeerSession {
       throw new TypeError("Invalid signaling message");
     }
 
-    if (message.type === "offer" && typeof message.sdp === "string") {
-      await this.#peer.setRemoteDescription({ type: "offer", sdp: message.sdp } as never);
-      const answer = await this.#peer.createAnswer();
-      await this.#peer.setLocalDescription(answer);
-      await this.#waitForIceGatheringComplete(10_000);
-      this.#options.sendSignal({
-        type: "answer",
-        sdp: this.#peer.localDescription?.sdp ?? answer.sdp,
-      });
-      this.#options.onMilestone?.("signal.answer", {
-        iceGatheringState: this.#peer.iceGatheringState,
-      });
+    if (message.type === "answer" && typeof message.sdp === "string") {
+      await this.#peer.setRemoteDescription({ type: "answer", sdp: message.sdp } as never);
+      this.#options.onMilestone?.("signal.answer-applied");
       return;
     }
 

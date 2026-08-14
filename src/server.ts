@@ -198,7 +198,7 @@ async function runSignalingSession(
 
     signalQueue = signalQueue
       .then(async () => {
-        if (isSignalType(message, "offer")) logSession(session.traceId, "signal.offer");
+        if (isSignalType(message, "answer")) logSession(session.traceId, "signal.answer");
         await peer.handleSignal(message);
       })
       .catch((error: unknown) => {
@@ -223,7 +223,8 @@ async function runSignalingSession(
   try {
     await peer.initialize();
     logSession(session.traceId, "xai.connected");
-    sendSignal({ type: "ready", model, voice });
+    const offer = await peer.createOffer();
+    sendSignal({ type: "offer", sdp: offer, model, voice });
   } catch (error) {
     console.error("Voice bridge setup failed", error instanceof Error ? error.message : error);
     sendSignal({ type: "error", message: "Could not connect the voice bridge" });
