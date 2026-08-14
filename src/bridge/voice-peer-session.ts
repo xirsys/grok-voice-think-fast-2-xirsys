@@ -32,6 +32,8 @@ export class VoicePeerSession {
   readonly #xai: XaiRealtimeRelay;
   #dataChannel?: DataChannelLike;
   #closed = false;
+  #clientEventCounts = new Map<string, number>();
+  #xaiEventTypes = new Set<string>();
 
   constructor(options: VoicePeerSessionOptions) {
     this.#options = options;
@@ -46,8 +48,24 @@ export class VoicePeerSession {
       voice: options.voice,
       instructions: options.instructions,
       reasoningEffort: options.reasoningEffort,
-      onEvent: (event) => this.#sendData(event),
-      onClose: (code) => {
+      onEvent: (event) => {
+        const type = typeof event.type === "string" ? event.type : "unknown";
+        if (!type.includes("audio.delta") || !this.#xaiEventTypes.has(type)) {
+          this.#options.onMilestone?.("xai.event", {
+            type,
+            ...(type === "error" && isRecord(event.error) && typeof event.error.code === "string"
+              ? { code: event.error.code }
+              : {}),
+          });
+        }
+        this.#xaiEventTypes.add(type);
+        this.#sendData(event);
+      },
+      onClose: (code, reason) => {
+        this.#options.onMilestone?.("xai.closed", {
+          code,
+          reason: reason.slice(0, 120),
+        });
         if (!this.#closed) this.#sendData({ type: "bridge.closed", code });
       },
     });
@@ -156,7 +174,16 @@ export class VoicePeerSession {
     channel.onmessage = (event) => {
       try {
         const value = typeof event.data === "string" ? event.data : String(event.data);
-        this.#xai.sendClientEvent(JSON.parse(value));
+        const clientEvent = JSON.parse(value) as unknown;
+        const type = isRecord(clientEvent) && typeof clientEvent.type === "string"
+          ? clientEvent.type
+          : "unknown";
+        const count = (this.#clientEventCounts.get(type) ?? 0) + 1;
+        this.#clientEventCounts.set(type, count);
+        if (count === 1 || (type === "input_audio_buffer.append" && count % 100 === 0)) {
+          this.#options.onMilestone?.("client.event", { type, count });
+        }
+        this.#xai.sendClientEvent(clientEvent);
       } catch (error) {
         this.#sendData({
           type: "bridge.error",
