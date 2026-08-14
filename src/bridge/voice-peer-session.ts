@@ -67,9 +67,13 @@ export class VoicePeerSession {
       await this.#peer.setRemoteDescription({ type: "offer", sdp: message.sdp } as never);
       const answer = await this.#peer.createAnswer();
       await this.#peer.setLocalDescription(answer);
+      await this.#waitForIceGatheringComplete(10_000);
       this.#options.sendSignal({
         type: "answer",
         sdp: this.#peer.localDescription?.sdp ?? answer.sdp,
+      });
+      this.#options.onMilestone?.("signal.answer", {
+        iceGatheringState: this.#peer.iceGatheringState,
       });
       return;
     }
@@ -96,9 +100,11 @@ export class VoicePeerSession {
       const candidate = event.candidate as unknown as Record<string, unknown> & {
         toJSON?: () => Record<string, unknown>;
       };
-      this.#options.sendSignal({
-        type: "ice-candidate",
-        candidate: candidate.toJSON ? candidate.toJSON() : candidate,
+      const serialized = candidate.toJSON ? candidate.toJSON() : candidate;
+      const summary = summarizeCandidate(serialized.candidate);
+      this.#options.onMilestone?.("ice.local-candidate", {
+        type: summary.type,
+        protocol: summary.protocol,
       });
     };
     this.#peer.onconnectionstatechange = () => {
@@ -115,6 +121,23 @@ export class VoicePeerSession {
     this.#peer.ondatachannel = (event) => {
       this.#attachDataChannel(event.channel as never);
     };
+  }
+
+  async #waitForIceGatheringComplete(timeoutMs: number): Promise<void> {
+    if (this.#peer.iceGatheringState === "complete") return;
+    await new Promise<void>((resolve) => {
+      const previous = this.#peer.onicegatheringstatechange;
+      const finish = () => {
+        clearTimeout(timeout);
+        this.#peer.onicegatheringstatechange = previous;
+        resolve();
+      };
+      const timeout = setTimeout(finish, timeoutMs);
+      this.#peer.onicegatheringstatechange = (event) => {
+        previous?.(event);
+        if (this.#peer.iceGatheringState === "complete") finish();
+      };
+    });
   }
 
   #attachDataChannel(channel: DataChannelLike | undefined): void {
@@ -154,6 +177,15 @@ export class VoicePeerSession {
       this.#dataChannel.send(JSON.stringify(event));
     }
   }
+}
+
+function summarizeCandidate(value: unknown): { type: string; protocol: string } {
+  if (typeof value !== "string") return { type: "unknown", protocol: "unknown" };
+  const fields = value.split(/\s+/);
+  return {
+    protocol: fields[2]?.toLowerCase() ?? "unknown",
+    type: fields[7]?.toLowerCase() ?? "unknown",
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

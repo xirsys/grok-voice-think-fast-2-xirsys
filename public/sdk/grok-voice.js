@@ -151,11 +151,6 @@ export class GrokVoiceClient extends EventTarget {
     this.#peer.onicegatheringstatechange = () => {
       this.#emit("ice-gathering-state", { state: this.#peer.iceGatheringState });
     };
-    this.#peer.onicecandidate = ({ candidate }) => {
-      if (candidate && this.#signaling?.readyState === WebSocket.OPEN) {
-        this.#signaling.send(JSON.stringify({ type: "ice-candidate", candidate }));
-      }
-    };
     this.#peer.oniceconnectionstatechange = () => {
       this.#emit("ice-state", { state: this.#peer.iceConnectionState });
       if (["failed", "closed"].includes(this.#peer.iceConnectionState)) {
@@ -202,7 +197,13 @@ export class GrokVoiceClient extends EventTarget {
         if (message.type === "ready") {
           const offer = await this.#peer.createOffer();
           await this.#peer.setLocalDescription(offer);
-          this.#signaling.send(JSON.stringify({ type: "offer", sdp: offer.sdp }));
+          await waitForIceGatheringComplete(this.#peer, 10_000);
+          this.#signaling.send(
+            JSON.stringify({
+              type: "offer",
+              sdp: this.#peer.localDescription?.sdp || offer.sdp,
+            }),
+          );
         } else if (message.type === "answer") {
           await this.#peer.setRemoteDescription({ type: "answer", sdp: message.sdp });
           for (const candidate of this.#pendingRemoteCandidates) {
@@ -240,7 +241,7 @@ export class GrokVoiceClient extends EventTarget {
       const timeout = window.setTimeout(() => {
         cleanup();
         reject(new Error("The WebRTC connection timed out"));
-      }, 25_000);
+      }, 45_000);
       const onStatus = ({ detail }) => {
         if (detail.status !== "connected") return;
         cleanup();
@@ -320,6 +321,22 @@ export class GrokVoiceClient extends EventTarget {
   #emit(type, detail) {
     this.dispatchEvent(new CustomEvent(type, { detail }));
   }
+}
+
+async function waitForIceGatheringComplete(peer, timeoutMs) {
+  if (peer.iceGatheringState === "complete") return;
+  await new Promise((resolve) => {
+    const finish = () => {
+      window.clearTimeout(timeout);
+      peer.removeEventListener("icegatheringstatechange", onStateChange);
+      resolve();
+    };
+    const onStateChange = () => {
+      if (peer.iceGatheringState === "complete") finish();
+    };
+    const timeout = window.setTimeout(finish, timeoutMs);
+    peer.addEventListener("icegatheringstatechange", onStateChange);
+  });
 }
 
 export function normalizeIceServers(value) {
