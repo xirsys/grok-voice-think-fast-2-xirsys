@@ -54,6 +54,8 @@ export class GrokVoiceClient extends EventTarget {
         iceTransportPolicy: forceRelay ? "relay" : "all",
       });
       this.#wirePeer();
+      this.#dataChannel = this.#peer.createDataChannel("xai-voice", { ordered: true });
+      this.#wireDataChannel();
 
       const signalingUrl = new URL(bootstrap.signalingUrl, window.location.href);
       signalingUrl.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -149,6 +151,11 @@ export class GrokVoiceClient extends EventTarget {
     this.#peer.onicegatheringstatechange = () => {
       this.#emit("ice-gathering-state", { state: this.#peer.iceGatheringState });
     };
+    this.#peer.onicecandidate = ({ candidate }) => {
+      if (candidate && this.#signaling?.readyState === WebSocket.OPEN) {
+        this.#signaling.send(JSON.stringify({ type: "ice-candidate", candidate }));
+      }
+    };
     this.#peer.oniceconnectionstatechange = () => {
       this.#emit("ice-state", { state: this.#peer.iceConnectionState });
       if (["failed", "closed"].includes(this.#peer.iceConnectionState)) {
@@ -157,10 +164,6 @@ export class GrokVoiceClient extends EventTarget {
     };
     this.#peer.onconnectionstatechange = () => {
       this.#emit("peer-state", { state: this.#peer.connectionState });
-    };
-    this.#peer.ondatachannel = ({ channel }) => {
-      this.#dataChannel = channel;
-      this.#wireDataChannel();
     };
   }
 
@@ -196,17 +199,12 @@ export class GrokVoiceClient extends EventTarget {
     this.#signaling.onmessage = async ({ data }) => {
       try {
         const message = JSON.parse(data);
-        if (message.type === "offer") {
-          await this.#peer.setRemoteDescription({ type: "offer", sdp: message.sdp });
-          const answer = await this.#peer.createAnswer();
-          await this.#peer.setLocalDescription(answer);
-          await waitForIceGatheringComplete(this.#peer, 10_000);
-          this.#signaling.send(
-            JSON.stringify({
-              type: "answer",
-              sdp: this.#peer.localDescription?.sdp || answer.sdp,
-            }),
-          );
+        if (message.type === "ready") {
+          const offer = await this.#peer.createOffer();
+          await this.#peer.setLocalDescription(offer);
+          this.#signaling.send(JSON.stringify({ type: "offer", sdp: offer.sdp }));
+        } else if (message.type === "answer") {
+          await this.#peer.setRemoteDescription({ type: "answer", sdp: message.sdp });
           for (const candidate of this.#pendingRemoteCandidates) {
             await this.#peer.addIceCandidate(candidate);
           }
@@ -242,7 +240,7 @@ export class GrokVoiceClient extends EventTarget {
       const timeout = window.setTimeout(() => {
         cleanup();
         reject(new Error("The WebRTC connection timed out"));
-      }, 45_000);
+      }, 25_000);
       const onStatus = ({ detail }) => {
         if (detail.status !== "connected") return;
         cleanup();
@@ -322,22 +320,6 @@ export class GrokVoiceClient extends EventTarget {
   #emit(type, detail) {
     this.dispatchEvent(new CustomEvent(type, { detail }));
   }
-}
-
-async function waitForIceGatheringComplete(peer, timeoutMs) {
-  if (peer.iceGatheringState === "complete") return;
-  await new Promise((resolve) => {
-    const finish = () => {
-      window.clearTimeout(timeout);
-      peer.removeEventListener("icegatheringstatechange", onStateChange);
-      resolve();
-    };
-    const onStateChange = () => {
-      if (peer.iceGatheringState === "complete") finish();
-    };
-    const timeout = window.setTimeout(finish, timeoutMs);
-    peer.addEventListener("icegatheringstatechange", onStateChange);
-  });
 }
 
 export function normalizeIceServers(value) {

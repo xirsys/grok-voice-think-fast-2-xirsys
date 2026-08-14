@@ -32,8 +32,6 @@ export class VoicePeerSession {
   readonly #xai: XaiRealtimeRelay;
   #dataChannel?: DataChannelLike;
   #closed = false;
-  #clientEventCounts = new Map<string, number>();
-  #xaiEventTypes = new Set<string>();
 
   constructor(options: VoicePeerSessionOptions) {
     this.#options = options;
@@ -48,43 +46,16 @@ export class VoicePeerSession {
       voice: options.voice,
       instructions: options.instructions,
       reasoningEffort: options.reasoningEffort,
-      onEvent: (event) => {
-        const type = typeof event.type === "string" ? event.type : "unknown";
-        if (!type.includes("audio.delta") || !this.#xaiEventTypes.has(type)) {
-          this.#options.onMilestone?.("xai.event", {
-            type,
-            ...(type === "error" && isRecord(event.error) && typeof event.error.code === "string"
-              ? { code: event.error.code }
-              : {}),
-          });
-        }
-        this.#xaiEventTypes.add(type);
-        this.#sendData(event);
-      },
-      onClose: (code, reason) => {
-        this.#options.onMilestone?.("xai.closed", {
-          code,
-          reason: reason.slice(0, 120),
-        });
+      onEvent: (event) => this.#sendData(event),
+      onClose: (code) => {
         if (!this.#closed) this.#sendData({ type: "bridge.closed", code });
       },
     });
     this.#wirePeer();
-    this.#attachDataChannel(this.#peer.createDataChannel("xai-voice", { ordered: true }) as never);
   }
 
   async initialize(): Promise<void> {
     await this.#xai.connect();
-  }
-
-  async createOffer(): Promise<string> {
-    const offer = await this.#peer.createOffer();
-    await this.#peer.setLocalDescription(offer);
-    await this.#waitForIceGatheringComplete(10_000);
-    this.#options.onMilestone?.("signal.offer", {
-      iceGatheringState: this.#peer.iceGatheringState,
-    });
-    return this.#peer.localDescription?.sdp ?? offer.sdp;
   }
 
   async handleSignal(message: unknown): Promise<void> {
@@ -92,9 +63,14 @@ export class VoicePeerSession {
       throw new TypeError("Invalid signaling message");
     }
 
-    if (message.type === "answer" && typeof message.sdp === "string") {
-      await this.#peer.setRemoteDescription({ type: "answer", sdp: message.sdp } as never);
-      this.#options.onMilestone?.("signal.answer-applied");
+    if (message.type === "offer" && typeof message.sdp === "string") {
+      await this.#peer.setRemoteDescription({ type: "offer", sdp: message.sdp } as never);
+      const answer = await this.#peer.createAnswer();
+      await this.#peer.setLocalDescription(answer);
+      this.#options.sendSignal({
+        type: "answer",
+        sdp: this.#peer.localDescription?.sdp ?? answer.sdp,
+      });
       return;
     }
 
@@ -120,11 +96,9 @@ export class VoicePeerSession {
       const candidate = event.candidate as unknown as Record<string, unknown> & {
         toJSON?: () => Record<string, unknown>;
       };
-      const serialized = candidate.toJSON ? candidate.toJSON() : candidate;
-      const summary = summarizeCandidate(serialized.candidate);
-      this.#options.onMilestone?.("ice.local-candidate", {
-        type: summary.type,
-        protocol: summary.protocol,
+      this.#options.sendSignal({
+        type: "ice-candidate",
+        candidate: candidate.toJSON ? candidate.toJSON() : candidate,
       });
     };
     this.#peer.onconnectionstatechange = () => {
@@ -143,23 +117,6 @@ export class VoicePeerSession {
     };
   }
 
-  async #waitForIceGatheringComplete(timeoutMs: number): Promise<void> {
-    if (this.#peer.iceGatheringState === "complete") return;
-    await new Promise<void>((resolve) => {
-      const previous = this.#peer.onicegatheringstatechange;
-      const finish = () => {
-        clearTimeout(timeout);
-        this.#peer.onicegatheringstatechange = previous;
-        resolve();
-      };
-      const timeout = setTimeout(finish, timeoutMs);
-      this.#peer.onicegatheringstatechange = (event) => {
-        previous?.(event);
-        if (this.#peer.iceGatheringState === "complete") finish();
-      };
-    });
-  }
-
   #attachDataChannel(channel: DataChannelLike | undefined): void {
     if (!channel) return;
     this.#dataChannel = channel;
@@ -174,16 +131,7 @@ export class VoicePeerSession {
     channel.onmessage = (event) => {
       try {
         const value = typeof event.data === "string" ? event.data : String(event.data);
-        const clientEvent = JSON.parse(value) as unknown;
-        const type = isRecord(clientEvent) && typeof clientEvent.type === "string"
-          ? clientEvent.type
-          : "unknown";
-        const count = (this.#clientEventCounts.get(type) ?? 0) + 1;
-        this.#clientEventCounts.set(type, count);
-        if (count === 1 || (type === "input_audio_buffer.append" && count % 100 === 0)) {
-          this.#options.onMilestone?.("client.event", { type, count });
-        }
-        this.#xai.sendClientEvent(clientEvent);
+        this.#xai.sendClientEvent(JSON.parse(value));
       } catch (error) {
         this.#sendData({
           type: "bridge.error",
@@ -206,15 +154,6 @@ export class VoicePeerSession {
       this.#dataChannel.send(JSON.stringify(event));
     }
   }
-}
-
-function summarizeCandidate(value: unknown): { type: string; protocol: string } {
-  if (typeof value !== "string") return { type: "unknown", protocol: "unknown" };
-  const fields = value.split(/\s+/);
-  return {
-    protocol: fields[2]?.toLowerCase() ?? "unknown",
-    type: fields[7]?.toLowerCase() ?? "unknown",
-  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
