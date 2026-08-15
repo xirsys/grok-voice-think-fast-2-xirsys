@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseWebRtcPortRange, server } from "../src/server.js";
+import { app, parseWebRtcPortRange, server } from "../src/server.js";
 
 test("validates the optional WebRTC UDP port range", () => {
   assert.deepEqual(parseWebRtcPortRange("50000", "50100"), [50000, 50100]);
@@ -21,10 +21,15 @@ test("bootstrap mints short-lived credentials without returning either provider 
   process.env.XIRSYS_SECRET = "xirsys-long-lived-secret";
   process.env.XIRSYS_CHANNEL = "voice";
   const originalFetch = globalThis.fetch;
+  const originalTrustProxy = app.get("trust proxy");
+  let xirsysRequestUrl = "";
+  let xirsysRequestBody: BodyInit | null | undefined;
+  app.set("trust proxy", 1);
 
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   context.after(async () => {
     globalThis.fetch = originalFetch;
+    app.set("trust proxy", originalTrustProxy);
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),
     );
@@ -40,6 +45,8 @@ test("bootstrap mints short-lived credentials without returning either provider 
       });
     }
     if (url.includes("/_turn/voice")) {
+      xirsysRequestUrl = url;
+      xirsysRequestBody = init?.body;
       return Response.json({
         s: "ok",
         v: {
@@ -58,7 +65,10 @@ test("bootstrap mints short-lived credentials without returning either provider 
   assert.ok(address && typeof address !== "string");
   const response = await originalFetch(`http://127.0.0.1:${address.port}/api/bootstrap`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Forwarded-For": "8.8.4.4",
+    },
     body: JSON.stringify({
       xaiApiKey: "xai-standard-key-never-returned",
       forceRelay: true,
@@ -76,6 +86,11 @@ test("bootstrap mints short-lived credentials without returning either provider 
   assert.ok(!bodyText.includes("xai-standard-key-never-returned"));
   assert.ok(!bodyText.includes("xai-realtime-client-secret-server-test"));
   assert.ok(!bodyText.includes("xirsys-long-lived-secret"));
+  assert.equal(new URL(xirsysRequestUrl).searchParams.get("geo"), "1");
+  assert.equal(
+    xirsysRequestBody,
+    JSON.stringify({ user_ip: "8.8.4.4" }),
+  );
 });
 
 test("bootstrap rejects malformed xAI keys before contacting a provider", async (context) => {

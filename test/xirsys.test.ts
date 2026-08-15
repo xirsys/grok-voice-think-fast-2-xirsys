@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { UpstreamApiError, XirsysClient } from "../src/sdk/index.js";
 
-test("requests browser-ready Xirsys ICE credentials and normalizes object shape", async () => {
+test("requests geo-routed Xirsys ICE credentials in the standard WebRTC array", async () => {
   let requestedUrl = "";
   let requestedInit: RequestInit | undefined;
   const client = new XirsysClient({
@@ -16,24 +16,57 @@ test("requests browser-ready Xirsys ICE credentials and normalizes object shape"
       return Response.json({
         s: "ok",
         v: {
-          iceServers: {
+          iceServers: [{
             urls: ["stun:example.xirsys.com", "turn:example.xirsys.com:3478?transport=udp"],
             username: "temporary-user",
             credential: "temporary-password",
-          },
+          }],
         },
       });
     },
   });
 
-  const servers = await client.getIceServers(60);
+  const servers = await client.getIceServers({
+    expiresInSeconds: 60,
+    userIp: "8.8.8.8",
+  });
 
   assert.equal(servers.length, 1);
   assert.equal(servers[0]?.username, "temporary-user");
-  assert.match(requestedUrl, /\/_turn\/voice\/production\?webrtc=1&expire=60/);
+  const url = new URL(requestedUrl);
+  assert.equal(url.pathname, "/_turn/voice/production");
+  assert.equal(url.searchParams.get("webrtc"), "1");
+  assert.equal(url.searchParams.get("expire"), "60");
+  assert.equal(url.searchParams.get("geo"), "1");
   assert.equal(requestedInit?.method, "PUT");
-  assert.equal(requestedInit?.body, JSON.stringify({ format: "urls" }));
+  assert.equal(
+    requestedInit?.body,
+    JSON.stringify({ user_ip: "8.8.8.8" }),
+  );
   assert.match(String((requestedInit?.headers as Record<string, string>).Authorization), /^Basic /);
+});
+
+test("falls back to normal routing when the end-user address is not public", async () => {
+  let requestedUrl = "";
+  let requestedBody: BodyInit | null | undefined;
+  const client = new XirsysClient({
+    ident: "account",
+    secret: "secret-value",
+    channel: "voice",
+    fetch: async (input, init) => {
+      requestedUrl = String(input);
+      requestedBody = init?.body;
+      return Response.json({
+        s: "ok",
+        v: { iceServers: [{ urls: "turn:example.xirsys.com" }] },
+      });
+    },
+  });
+
+  await client.getIceServers({ userIp: "::ffff:127.0.0.1" });
+
+  assert.equal(new URL(requestedUrl).searchParams.has("geo"), false);
+  assert.equal(requestedBody, undefined);
 });
 
 test("returns a credential-safe Xirsys error", async () => {

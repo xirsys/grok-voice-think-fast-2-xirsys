@@ -53,7 +53,7 @@ This tutorial demonstrates:
 - a browser WebRTC peer connected to a pure JavaScript `werift` peer on Node;
 - ordered PCM16 audio and Realtime JSON events over a WebRTC data channel;
 - a server-side xAI WebSocket authenticated with a short-lived client secret;
-- fresh Xirsys ICE credentials for every session;
+- fresh, end-user geo-routed Xirsys ICE credentials for every session;
 - selected ICE-path diagnostics and a real relay-only test; and
 - a secure, path-prefix-safe demo deployment behind Caddy.
 
@@ -86,6 +86,11 @@ XIRSYS_IDENT=your-xirsys-ident
 XIRSYS_SECRET=your-xirsys-secret
 XIRSYS_CHANNEL=your-channel-name
 ```
+
+When deploying directly behind one trusted reverse proxy, also set
+`TRUST_PROXY=true`. The server then uses Express's proxy-derived client address
+for Xirsys geo routing and rate limiting. Leave it disabled when clients can
+connect to Node directly.
 
 The demo pins the model for stable behavior:
 
@@ -121,8 +126,9 @@ The connection happens in this order:
 
 1. The browser asks for microphone permission.
 2. `POST /api/bootstrap` uses the tester key once to mint a short-lived xAI
-   secret and requests Xirsys ICE servers with `webrtc=1`, `expire=60`, and
-   `{"format":"urls"}`.
+   secret and requests Xirsys ICE servers with `webrtc=1` and `expire=60`.
+   When Express provides a valid public client address through the trusted
+   proxy, the request also includes `geo=1` and `{"user_ip":"…"}`.
 3. The server stores only the ephemeral xAI secret and Xirsys ICE response under
    a random, single-use signaling ID for up to two minutes.
 4. The browser and `werift` create peer connections using the same Xirsys ICE
@@ -145,12 +151,21 @@ const xirsys = new XirsysClient({
   channel: process.env.XIRSYS_CHANNEL!,
 });
 
-const iceServers = await xirsys.getIceServers(60);
+const iceServers = await xirsys.getIceServers({
+  expiresInSeconds: 60,
+  userIp: request.ip, // derived from the trusted request/proxy, not client input
+});
 ```
 
-The client uses HTTP Basic auth only from Node, asks for the current `urls`
-response format, checks both HTTP status and the Xirsys response envelope, and
-normalizes either the object or array response shape for `RTCPeerConnection`.
+The client uses HTTP Basic auth only from Node and requests `webrtc=1`, which
+returns the standardized WebRTC `iceServers` array without needing the legacy
+`format=urls` field. It checks both HTTP status and the Xirsys response envelope
+and still tolerates the older single-object response shape.
+When given a valid public `userIp`, it sends `geo=1` so Xirsys can select TURN
+infrastructure for the end user's location instead of the backend's location.
+Private, reserved, and invalid addresses safely fall back to normal routing;
+an account-assigned TURN region still takes precedence. Xirsys uses the IP
+transiently for region selection and does not persist it.
 The 60-second lifetime controls how long a **new** TURN allocation can
 authenticate; it does not impose a 60-second voice-call limit.
 
@@ -222,6 +237,8 @@ direct path when one is available.
 - Authenticate the bootstrap endpoint and authorize every new session.
 - Add a durable, shared rate limiter before running more than one Node process.
 - Set `PUBLIC_ORIGIN` to the exact public HTTPS origin.
+- Set `TRUST_PROXY=true` only when exactly one trusted reverse proxy is the
+  application's sole public ingress; geo routing must never use a client-supplied IP.
 - Set `WEBRTC_UDP_PORT_MIN` and `WEBRTC_UDP_PORT_MAX` to a small high-port
   range, then allow that UDP range through the host and cloud firewalls.
 - Keep Xirsys credentials and any server-owned xAI key in a secret manager.

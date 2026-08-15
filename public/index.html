@@ -50,8 +50,9 @@
             <h1>Use Grok Voice Agents on Xirsys</h1>
             <p class="hero-copy">
               Stream natural speech to Grok over a browser-to-Node WebRTC link.
-              Xirsys adds fresh STUN and TURN credentials so the session can
-              keep moving through restrictive NATs and firewalls.
+              Xirsys adds fresh STUN and TURN credentials, with TURN routing
+              selected for the user's location so the session can keep moving
+              through restrictive NATs and firewalls.
             </p>
 
             <div class="hero-actions">
@@ -201,7 +202,7 @@
             </li>
             <li>
               <span>02</span>
-              <div><h3>Mint short-lived credentials</h3><p><code>POST /api/bootstrap</code> exchanges the standard xAI key for an ephemeral secret and requests fresh Xirsys ICE servers.</p></div>
+              <div><h3>Mint short-lived credentials</h3><p><code>POST /api/bootstrap</code> exchanges the standard xAI key for an ephemeral secret and requests fresh Xirsys ICE credentials with geo-selected TURN routing.</p></div>
             </li>
             <li>
               <span>03</span>

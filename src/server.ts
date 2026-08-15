@@ -84,12 +84,16 @@ app.post(
         channel: requireEnvironment("XIRSYS_CHANNEL"),
         baseUrl: process.env.XIRSYS_API_BASE ?? "https://global.xirsys.net",
       });
+      const userIp = request.ip;
 
       const [clientSecret, iceServers] = await Promise.all([
         xai.createClientSecret(
           parsePositiveInteger(process.env.XAI_CLIENT_SECRET_TTL_SECONDS, 300),
         ),
-        xirsys.getIceServers(parsePositiveInteger(process.env.XIRSYS_ICE_TTL_SECONDS, 60)),
+        xirsys.getIceServers({
+          expiresInSeconds: parsePositiveInteger(process.env.XIRSYS_ICE_TTL_SECONDS, 60),
+          ...(userIp ? { userIp } : {}),
+        }),
       ]);
       const sessionId = crypto.randomBytes(24).toString("base64url");
       const traceId = crypto.randomBytes(6).toString("hex");
